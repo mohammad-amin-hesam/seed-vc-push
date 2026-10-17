@@ -1,8 +1,10 @@
 # Pushes the Seed-VC singing model (Hamava zero-shot voice conversion, D180)
 # to Replicate as a PUBLIC model, from GitHub's network.
 #
-# Needs the repo secret REPLICATE_API_TOKEN. Creates the model (Public, L40S)
-# under the token's account when it does not exist yet; push itself is free.
+# Needs two repo secrets: REPLICATE_API_TOKEN (API: create the model, read its
+# version) and REPLICATE_CLI_AUTH_TOKEN (cog login; from replicate.com/auth/token —
+# Cog rejects API tokens). Creates the model (Public, L40S) under the API token's
+# account when missing; push itself is free.
 name: push-seed-vc
 
 on:
@@ -63,8 +65,10 @@ jobs:
 
       - name: Log in to Replicate
         env:
-          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
-        run: echo "$REPLICATE_API_TOKEN" | cog login --token-stdin
+          REPLICATE_CLI_AUTH_TOKEN: ${{ secrets.REPLICATE_CLI_AUTH_TOKEN }}
+        run: |
+          test -n "$REPLICATE_CLI_AUTH_TOKEN" || { echo "::error::repo secret REPLICATE_CLI_AUTH_TOKEN is missing (replicate.com/auth/token)"; exit 1; }
+          echo "$REPLICATE_CLI_AUTH_TOKEN" | cog login --token-stdin
 
       - name: Push
         run: cog push "r8.im/${{ steps.model.outputs.model }}"
