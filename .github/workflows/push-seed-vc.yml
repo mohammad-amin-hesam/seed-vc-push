@@ -1,0 +1,78 @@
+# Pushes the Seed-VC singing model (Hamava zero-shot voice conversion, D180)
+# to Replicate as a PUBLIC model, from GitHub's network.
+#
+# Needs the repo secret REPLICATE_API_TOKEN. Creates the model (Public, L40S)
+# under the token's account when it does not exist yet; push itself is free.
+name: push-seed-vc
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Model name under the token's Replicate account"
+        required: true
+        default: "seed-vc-singing"
+      ref:
+        description: "azer/seed-vc git ref"
+        required: true
+        default: "main"
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # The image bakes every checkpoint in (torch + Seed-VC + BigVGAN + Whisper):
+      # make room on the runner first.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          repository: azer/seed-vc
+          ref: ${{ inputs.ref }}
+
+      # 0.16.12 on purpose: 0.17+ inlines the labelled {vocals} Path output as base64.
+      - name: Install Cog 0.16.12
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/cog https://github.com/replicate/cog/releases/download/v0.16.12/cog_Linux_x86_64
+          sudo chmod +x /usr/local/bin/cog
+          cog --version
+
+      - name: Ensure the model exists (public, L40S)
+        id: model
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          NAME: ${{ inputs.name }}
+        run: |
+          test -n "$REPLICATE_API_TOKEN" || { echo "::error::repo secret REPLICATE_API_TOKEN is missing"; exit 1; }
+          H="Authorization: Bearer $REPLICATE_API_TOKEN"
+          OWNER=$(curl -fsS -H "$H" https://api.replicate.com/v1/account | python3 -c 'import json,sys; print(json.load(sys.stdin)["username"])')
+          echo "model=$OWNER/$NAME" >> "$GITHUB_OUTPUT"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "https://api.replicate.com/v1/models/$OWNER/$NAME")
+          if [ "$code" = "404" ]; then
+            curl -fsS -X POST -H "$H" -H "Content-Type: application/json" https://api.replicate.com/v1/models \
+              -d "{\"owner\":\"$OWNER\",\"name\":\"$NAME\",\"visibility\":\"public\",\"hardware\":\"gpu-l40s\",\"description\":\"Seed-VC singing voice conversion (44.1 kHz f0), any voice sample as the target\",\"github_url\":\"https://github.com/azer/seed-vc\",\"license_url\":\"https://github.com/azer/seed-vc/blob/main/LICENSE\"}" >/dev/null
+            echo "created $OWNER/$NAME"
+          else
+            echo "exists ($code): $OWNER/$NAME"
+          fi
+
+      - name: Log in to Replicate
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+        run: echo "$REPLICATE_API_TOKEN" | cog login --token-stdin
+
+      - name: Push
+        run: cog push "r8.im/${{ steps.model.outputs.model }}"
+
+      - name: Latest version
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+        run: |
+          curl -fsS -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
+            "https://api.replicate.com/v1/models/${{ steps.model.outputs.model }}" \
+            | python3 -c 'import json,sys; m=json.load(sys.stdin); print("::notice::"+m["owner"]+"/"+m["name"]+":"+m["latest_version"]["id"]+" visibility="+m["visibility"])'
